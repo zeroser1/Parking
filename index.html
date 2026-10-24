@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#14213d">
+<title>Where's my car</title>
+<style>
+  :root {
+    --bg: #f5f3ee; --ink: #14213d; --muted: #5b6475; --line: #d9d5ca;
+    --accent: #14213d; --accent-ink: #ffffff; --warn: #a4372b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #101522; --ink: #f1efe8; --muted: #9aa3b5; --line: #26304a;
+            --accent: #f1efe8; --accent-ink: #101522; --warn: #ff8a7a; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 480px; margin: 0 auto; padding: 24px 20px 40px; }
+  h1 { font-size: 1.4rem; margin: 0 0 20px; }
+  button { font: inherit; border-radius: 12px; border: 2px solid var(--accent);
+    padding: 16px; width: 100%; cursor: pointer; }
+  button:focus-visible { outline: 3px solid var(--warn); outline-offset: 2px; }
+  .primary { background: var(--accent); color: var(--accent-ink); font-size: 1.2rem; font-weight: 700; }
+  .secondary { background: transparent; color: var(--ink); font-weight: 600; margin-top: 12px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .current { margin: 24px 0 8px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; }
+  .current p { margin: 4px 0; }
+  .muted { color: var(--muted); font-size: .9rem; }
+  #status { min-height: 1.4em; margin-top: 12px; }
+  #status.error { color: var(--warn); }
+  h2 { font-size: 1rem; margin: 28px 0 8px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    padding: 10px 0; border-bottom: 1px solid var(--line); }
+  li a { color: var(--ink); font-weight: 600; }
+  .link { background: none; border: none; width: auto; padding: 4px 0; color: var(--muted);
+    text-decoration: underline; font-size: .9rem; margin-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Where's my car</h1>
+
+  <button id="save" class="primary">Save my car here</button>
+  <div id="status" class="muted" role="status" aria-live="polite"></div>
+
+  <section class="current" id="current" hidden>
+    <p class="muted">Last saved spot</p>
+    <p id="when"></p>
+    <p class="muted" id="acc"></p>
+    <button id="go" class="secondary">Navigate to my car</button>
+  </section>
+
+  <section id="historyWrap" hidden>
+    <h2>Previous spots</h2>
+    <ul id="history"></ul>
+    <button id="clear" class="link">Clear all</button>
+  </section>
+</main>
+
+<script>
+(function () {
+  var KEY = "carSpots";
+  var MAX = 10;
+  var saveBtn = document.getElementById("save");
+  var statusEl = document.getElementById("status");
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(KEY)) || []; }
+    catch (e) { return []; }
+  }
+  function store(list) {
+    try { localStorage.setItem(KEY, JSON.stringify(list)); return true; }
+    catch (e) { return false; }
+  }
+  function pad(n) { return String(n).padStart(2, "0"); }
+  function fmt(ts) {
+    var d = new Date(ts);
+    return pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear() +
+           " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+  function mapsUrl(s) {
+    return "https://www.google.com/maps/dir/?api=1&destination=" + s.lat + "," + s.lng +
+           "&travelmode=walking";
+  }
+  function setStatus(msg, isError) {
+    statusEl.textContent = msg || "";
+    statusEl.className = isError ? "error" : "muted";
+  }
+
+  function render() {
+    var list = load();
+    var current = document.getElementById("current");
+    var wrap = document.getElementById("historyWrap");
+    var ul = document.getElementById("history");
+    ul.innerHTML = "";
+
+    if (!list.length) { current.hidden = true; wrap.hidden = true; return; }
+
+    var last = list[0];
+    current.hidden = false;
+    document.getElementById("when").textContent = fmt(last.ts);
+    document.getElementById("acc").textContent =
+      last.acc ? "Accuracy about " + Math.round(last.acc) + " m" : "";
+    document.getElementById("go").onclick = function () {
+      window.open(mapsUrl(last), "_blank");
+    };
+
+    var older = list.slice(1);
+    wrap.hidden = !older.length;
+    older.forEach(function (s) {
+      var li = document.createElement("li");
+      var span = document.createElement("span");
+      span.textContent = fmt(s.ts);
+      var a = document.createElement("a");
+      a.href = mapsUrl(s); a.target = "_blank"; a.rel = "noopener";
+      a.textContent = "Navigate";
+      li.appendChild(span); li.appendChild(a);
+      ul.appendChild(li);
+    });
+  }
+
+  saveBtn.addEventListener("click", function () {
+    if (!("geolocation" in navigator)) {
+      setStatus("This browser has no GPS support.", true); return;
+    }
+    saveBtn.disabled = true;
+    setStatus("Getting GPS position…");
+    navigator.geolocation.getCurrentPosition(function (pos) {
+      var list = load();
+      list.unshift({
+        lat: pos.coords.latitude, lng: pos.coords.longitude,
+        acc: pos.coords.accuracy, ts: Date.now()
+      });
+      list = list.slice(0, MAX);
+      if (store(list)) setStatus("Saved.");
+      else setStatus("Could not save. Check that the browser allows site storage.", true);
+      saveBtn.disabled = false;
+      render();
+    }, function (err) {
+      var msg = "Could not get your position.";
+      if (err.code === 1) msg = "Location permission denied. Allow location for this site in Chrome settings.";
+      else if (err.code === 2) msg = "Position unavailable. Turn on GPS and try again.";
+      else if (err.code === 3) msg = "GPS timed out. Move to an open area and try again.";
+      setStatus(msg, true);
+      saveBtn.disabled = false;
+    }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+  });
+
+  document.getElementById("clear").addEventListener("click", function () {
+    if (confirm("Delete all saved spots?")) { store([]); setStatus(""); render(); }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
