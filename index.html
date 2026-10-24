@@ -7,6 +7,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <title>¿Dónde está mi auto?</title>
 <style>
   :root {
@@ -48,6 +49,11 @@
   .link { background: none; border: none; width: auto; padding: 4px 0; color: var(--muted);
     text-decoration: underline; font-size: .9rem; margin-top: 12px; }
   input[type=file] { display: none; }
+  #map { height: 240px; border-radius: 12px; margin-top: 12px; border: 1px solid var(--line); }
+  .carpin { width: 30px; height: 30px; border-radius: 50%; background: #14213d; color: #fff;
+    border: 3px solid #fff; display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 15px; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+  .disttip { font-weight: 700; }
 </style>
 </head>
 <body>
@@ -76,6 +82,7 @@
     <button id="share" class="secondary">Compartir ubicación</button>
     <button id="distBtn" class="secondary">Ver distancia hasta mi auto</button>
     <p id="dist" aria-live="polite"></p>
+    <div id="map" role="img" aria-label="Mapa con la ubicación de tu auto" hidden></div>
   </section>
 
   <section id="historyWrap" hidden>
@@ -85,6 +92,7 @@
   </section>
 </main>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 (function () {
   var KEY = "carSpots";
@@ -130,10 +138,67 @@
     return m < 1000 ? Math.round(m) + " m" : (m / 1000).toFixed(1).replace(".", ",") + " km";
   }
 
+  var map = null, carMarker = null, userMarker = null, trackLine = null;
+  var shownTs = null, fitted = false;
+
+  function clearTrack() {
+    if (!map) return;
+    if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
+    if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
+  }
+
+  function showMap(spot) {
+    var el = $("map");
+    if (typeof L === "undefined") { el.hidden = true; return; }
+    el.hidden = false;
+    var ll = [spot.lat, spot.lng];
+    if (!map) {
+      map = L.map(el);
+      map.setView(ll, 17);
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        { maxZoom: 19, attribution: "&copy; OpenStreetMap" }).addTo(map);
+    }
+    if (!carMarker) {
+      carMarker = L.marker(ll, {
+        icon: L.divIcon({ className: "", html: '<div class="carpin">P</div>',
+                          iconSize: [30, 30], iconAnchor: [15, 15] })
+      }).addTo(map);
+    } else {
+      carMarker.setLatLng(ll);
+    }
+    map.invalidateSize();
+    if (shownTs !== spot.ts) {
+      shownTs = spot.ts; fitted = false; clearTrack(); map.setView(ll, 17);
+    }
+  }
+
+  function updateTrack(userLL, spot, label) {
+    if (!map || typeof L === "undefined") return;
+    var carLL = [spot.lat, spot.lng];
+    if (!userMarker) {
+      userMarker = L.circleMarker(userLL, { radius: 8, color: "#ffffff", weight: 3,
+        fillColor: "#1a73e8", fillOpacity: 1 }).addTo(map);
+    } else {
+      userMarker.setLatLng(userLL);
+    }
+    if (trackLine) map.removeLayer(trackLine);
+    trackLine = L.polyline([userLL, carLL],
+      { color: "#1a73e8", weight: 3, dashArray: "6 8" }).addTo(map);
+    trackLine.bindTooltip(label, { permanent: true, direction: "center", className: "disttip" });
+    if (!fitted) {
+      map.fitBounds(L.latLngBounds([userLL, carLL]), { padding: [40, 40], maxZoom: 18 });
+      fitted = true;
+    }
+  }
+
   function stopWatch() {
     if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
     $("distBtn").textContent = "Ver distancia hasta mi auto";
     $("dist").textContent = "";
+    fitted = false;
+    clearTrack();
+    var cur = load()[0];
+    if (map && cur) map.setView([cur.lat, cur.lng], 17);
   }
 
   function render() {
@@ -156,6 +221,7 @@
     else { img.removeAttribute("src"); img.hidden = true; }
     $("removePhoto").hidden = !last.photo;
     $("takePhoto").textContent = last.photo ? "Repetir foto" : "Hacer foto";
+    showMap(last);
 
     var older = list.slice(1);
     wrap.hidden = !older.length;
@@ -292,8 +358,11 @@
     $("distBtn").textContent = "Detener distancia";
     $("dist").textContent = "Localizando…";
     watchId = navigator.geolocation.watchPosition(function (pos) {
-      var m = meters(pos.coords.latitude, pos.coords.longitude, spot.lat, spot.lng);
-      $("dist").textContent = fmtDist(m) + " de tu auto";
+      var cur = load()[0] || spot;
+      var m = meters(pos.coords.latitude, pos.coords.longitude, cur.lat, cur.lng);
+      var label = fmtDist(m);
+      $("dist").textContent = label + " de tu auto";
+      updateTrack([pos.coords.latitude, pos.coords.longitude], cur, label);
     }, function (err) {
       stopWatch();
       setStatus(err.code === 1 ? "Permiso de ubicación denegado." : "No se pudo obtener tu posición.", true);
