@@ -139,7 +139,9 @@
   }
 
   var map = null, carMarker = null, userMarker = null, trackLine = null;
-  var shownTs = null, fitted = false;
+  var shownTs = null, fitted = 0;
+  var lastFix = null, routing = false;
+  var lastRoute = { t: 0, lat: null, lng: null, spotTs: null, dist: null, coords: null, failed: false };
 
   function clearTrack() {
     if (!map) return;
@@ -168,11 +170,11 @@
     }
     map.invalidateSize();
     if (shownTs !== spot.ts) {
-      shownTs = spot.ts; fitted = false; clearTrack(); map.setView(ll, 17);
+      shownTs = spot.ts; fitted = 0; clearTrack(); map.setView(ll, 17);
     }
   }
 
-  function updateTrack(userLL, spot, label) {
+  function updateTrack(userLL, spot, label, routeCoords) {
     if (!map || typeof L === "undefined") return;
     var carLL = [spot.lat, spot.lng];
     if (!userMarker) {
@@ -182,20 +184,63 @@
       userMarker.setLatLng(userLL);
     }
     if (trackLine) map.removeLayer(trackLine);
-    trackLine = L.polyline([userLL, carLL],
-      { color: "#1a73e8", weight: 3, dashArray: "6 8" }).addTo(map);
+    var hasRoute = routeCoords && routeCoords.length > 1;
+    var pts = hasRoute ? routeCoords : [userLL, carLL];
+    var opts = hasRoute ? { color: "#1a73e8", weight: 4 }
+                        : { color: "#1a73e8", weight: 3, dashArray: "6 8" };
+    trackLine = L.polyline(pts, opts).addTo(map);
     trackLine.bindTooltip(label, { permanent: true, direction: "center", className: "disttip" });
-    if (!fitted) {
-      map.fitBounds(L.latLngBounds([userLL, carLL]), { padding: [40, 40], maxZoom: 18 });
-      fitted = true;
+    var want = hasRoute ? 2 : 1;
+    if (fitted < want) {
+      map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 18 });
+      fitted = want;
     }
+  }
+
+  /* Walking route (public OSM/FOSSGIS foot router). Falls back to straight-line distance. */
+  function fetchRoute(from, spot, done) {
+    var url = "https://routing.openstreetmap.de/routed-foot/route/v1/foot/" +
+      from[1] + "," + from[0] + ";" + spot.lng + "," + spot.lat +
+      "?overview=full&geometries=geojson";
+    var ctl = new AbortController();
+    var to = setTimeout(function () { ctl.abort(); }, 8000);
+    fetch(url, { signal: ctl.signal })
+      .then(function (r) { if (!r.ok) throw new Error("http"); return r.json(); })
+      .then(function (j) {
+        clearTimeout(to);
+        if (!j.routes || !j.routes.length) throw new Error("noroute");
+        var r0 = j.routes[0];
+        done({
+          dist: r0.distance,
+          coords: r0.geometry.coordinates.map(function (c) { return [c[1], c[0]]; })
+        });
+      })
+      .catch(function () { clearTimeout(to); done(null); });
+  }
+
+  function showDistance() {
+    if (!lastFix) return;
+    var haveRoute = lastRoute.spotTs === lastFix.spot.ts && lastRoute.dist != null;
+    var label, text;
+    if (haveRoute) {
+      label = fmtDist(lastRoute.dist);
+      text = label + " a pie";
+    } else {
+      label = fmtDist(lastFix.straight);
+      text = label + " en línea recta";
+      if (lastRoute.failed) text += " (no se pudo calcular la ruta a pie)";
+    }
+    $("dist").textContent = text;
+    updateTrack(lastFix.ll, lastFix.spot, label, haveRoute ? lastRoute.coords : null);
   }
 
   function stopWatch() {
     if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
     $("distBtn").textContent = "Ver distancia hasta mi auto";
     $("dist").textContent = "";
-    fitted = false;
+    fitted = 0;
+    lastFix = null; routing = false;
+    lastRoute = { t: 0, lat: null, lng: null, spotTs: null, dist: null, coords: null, failed: false };
     clearTrack();
     var cur = load()[0];
     if (map && cur) map.setView([cur.lat, cur.lng], 17);
@@ -359,10 +404,26 @@
     $("dist").textContent = "Localizando…";
     watchId = navigator.geolocation.watchPosition(function (pos) {
       var cur = load()[0] || spot;
-      var m = meters(pos.coords.latitude, pos.coords.longitude, cur.lat, cur.lng);
-      var label = fmtDist(m);
-      $("dist").textContent = label + " de tu auto";
-      updateTrack([pos.coords.latitude, pos.coords.longitude], cur, label);
+      var here = [pos.coords.latitude, pos.coords.longitude];
+      lastFix = { ll: here, spot: cur, straight: meters(here[0], here[1], cur.lat, cur.lng) };
+
+      var moved = lastRoute.lat === null ||
+                  meters(here[0], here[1], lastRoute.lat, lastRoute.lng) > 20;
+      var stale = lastRoute.spotTs !== cur.ts || moved;
+      if (!routing && stale && Date.now() - lastRoute.t > 8000) {
+        routing = true;
+        lastRoute.t = Date.now();
+        fetchRoute(here, cur, function (res) {
+          routing = false;
+          if (watchId === null) return;
+          lastRoute.lat = here[0]; lastRoute.lng = here[1]; lastRoute.spotTs = cur.ts;
+          lastRoute.dist = res ? res.dist : null;
+          lastRoute.coords = res ? res.coords : null;
+          lastRoute.failed = !res;
+          showDistance();
+        });
+      }
+      showDistance();
     }, function (err) {
       stopWatch();
       setStatus(err.code === 1 ? "Permiso de ubicación denegado." : "No se pudo obtener tu posición.", true);
