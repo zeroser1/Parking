@@ -122,6 +122,39 @@
     text-decoration: underline; font: inherit; font-size: .95rem; cursor: pointer; }
   .foot { margin-top: 28px; color: var(--muted); font-size: .9rem; }
 
+  /* Feature: address display */
+  .addr { font: 600 1.05rem/1.3 var(--display); margin: 4px 0 2px; color: var(--ink); min-height: 1.2em; }
+
+  /* Feature: parking timer */
+  .timer-section { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .timer-label { font: 700 .85rem/1 var(--display); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  .timer-row { display: flex; gap: 8px; }
+  .timer-btn { flex: 1; font-size: .9rem !important; min-height: 40px !important; }
+  #timerDisplay { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; gap: 12px; }
+  #timerCount { font: 700 1.6rem/1 var(--display); }
+  #timerCount.urgent { color: var(--danger); }
+  #timerNote { font-size: .8rem; color: var(--muted); margin-top: 8px; }
+
+  /* Feature: compass overlay */
+  #compassOverlay {
+    position: fixed; inset: 0; z-index: 5000;
+    background: #0A0E17;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px;
+    padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+  }
+  #compassOverlay[hidden] { display: none !important; }
+  #compassClose { position: absolute; top: max(20px, env(safe-area-inset-top)); right: 20px; }
+  #compassArrowWrap {
+    width: 180px; height: 180px; border-radius: 50%;
+    background: linear-gradient(160deg, #1560C0, #0A4DA2);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 48px rgba(10,77,162,.55);
+  }
+  #compassArrowSvg { width: 72px; height: 72px; transition: transform .12s ease-out; }
+  #compassDist { font: 700 3rem/1 var(--display); color: #EDEFF2; text-align: center; }
+  #compassAddr { font: 500 .95rem/1.4 var(--text); color: #8DB8FF; text-align: center; max-width: 280px; }
+  #compassErr { color: #9AA3B2; text-align: center; max-width: 280px; font-size: .9rem; }
+
   #offline-banner {
     position: fixed; bottom: calc(20px + env(safe-area-inset-bottom)); left: 50%;
     transform: translateX(-50%);
@@ -147,6 +180,7 @@
   <section class="spot" id="current" hidden>
     <p class="muted">Último lugar guardado</p>
     <p class="when" id="when"></p>
+    <p class="addr" id="addr"></p>
     <p class="muted" id="acc"></p>
 
     <p id="dist" class="distance" aria-live="polite"></p>
@@ -156,9 +190,25 @@
     <div class="actions">
       <button id="go" class="btn primary" type="button">🗺️ Ir hasta mi auto</button>
       <div class="row">
-        <button id="distBtn" class="btn" type="button">🚶 Ver distancia</button>
+        <button id="distBtn" class="btn" type="button">🚶 Distancia</button>
+        <button id="compassBtn" class="btn" type="button">🧭 Brújula</button>
         <button id="share" class="btn" type="button">📤 Compartir</button>
       </div>
+    </div>
+
+    <div class="timer-section" id="timerSection" hidden>
+      <p class="timer-label">⏱ Alarma de estacionamiento</p>
+      <div class="timer-row">
+        <button class="btn timer-btn" data-min="30">30m</button>
+        <button class="btn timer-btn" data-min="60">1h</button>
+        <button class="btn timer-btn" data-min="120">2h</button>
+        <button class="btn timer-btn" data-min="180">3h</button>
+      </div>
+      <div id="timerDisplay" hidden>
+        <span id="timerCount"></span>
+        <button id="timerCancel" class="btn">✕ Cancelar</button>
+      </div>
+      <p id="timerNote" class="muted" hidden>Funciona mientras la app esté abierta o en segundo plano.</p>
     </div>
 
     <div class="extras">
@@ -183,6 +233,20 @@
 
   <p class="foot">🔒 Tus lugares, notas y fotos se guardan solo en este teléfono.</p>
 </main>
+
+<!-- Compass fullscreen overlay -->
+<div id="compassOverlay" hidden>
+  <button id="compassClose" class="btn" type="button">✕ Cerrar</button>
+  <div id="compassArrowWrap">
+    <svg id="compassArrowSvg" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <polygon points="36,6 44,56 36,48 28,56" fill="white" opacity=".95"/>
+      <polygon points="36,66 44,16 36,24 28,16" fill="white" opacity=".3"/>
+    </svg>
+  </div>
+  <p id="compassDist"></p>
+  <p id="compassAddr"></p>
+  <p id="compassErr"></p>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
@@ -231,6 +295,9 @@
   }
 
   var map = null, carMarker = null, userMarker = null, trackLine = null;
+  var notifiedClose = false;
+  var timerTimeout = null, timerInterval = null;
+  var compassWatch = null, compassHeading = 0, compassBearing = 0;
   var shownTs = null, fitted = 0;
   var lastFix = null, routing = false;
   var lastRoute = { t: 0, lat: null, lng: null, spotTs: null, dist: null, coords: null, failed: false };
@@ -341,10 +408,212 @@
     $("distNote").textContent = "";
     fitted = 0;
     lastFix = null; routing = false;
+    notifiedClose = false;
     lastRoute = { t: 0, lat: null, lng: null, spotTs: null, dist: null, coords: null, failed: false };
     clearTrack();
     var cur = load()[0];
     if (map && cur) map.setView([cur.lat, cur.lng], 17);
+  }
+
+  /* ── Geocoding ────────────────────────────────────────── */
+  function geocodeSpot(spot) {
+    fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + spot.lat + '&lon=' + spot.lng, {
+      headers: { 'Accept-Language': 'es', 'User-Agent': 'DondeEstaMiAuto/1.0' }
+    })
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(j) {
+      if (!j) return;
+      var a = j.address || {};
+      var road = a.road || a.pedestrian || a.path || a.footway || '';
+      var num  = a.house_number ? ' ' + a.house_number : '';
+      var sub  = a.suburb || a.neighbourhood || a.city_district || '';
+      var city = a.city || a.town || a.village || a.municipality || '';
+      var parts = [road + num, sub, city].filter(Boolean);
+      var addr = parts.length ? parts.join(', ') : (j.display_name || '').split(',').slice(0, 2).join(',').trim();
+      if (!addr) return;
+      var list = load();
+      if (list.length && list[0].ts === spot.ts) {
+        list[0].address = addr;
+        store(list);
+        var addrEl = $('addr');
+        if (addrEl) addrEl.textContent = addr;
+      }
+    })
+    .catch(function() {});
+  }
+
+  /* ── Notifications ────────────────────────────────────── */
+  function requestNotifPerm(cb) {
+    if (!('Notification' in window)) { cb(false); return; }
+    if (Notification.permission === 'granted') { cb(true); return; }
+    Notification.requestPermission().then(function(p) { cb(p === 'granted'); });
+  }
+
+  /* ── Parking timer ────────────────────────────────────── */
+  function clearTimer() {
+    if (timerTimeout) { clearTimeout(timerTimeout); timerTimeout = null; }
+    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+    localStorage.removeItem('carTimer');
+    renderTimer();
+  }
+
+  function armTimer(end, canNotify) {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    if (timerInterval) clearInterval(timerInterval);
+    var remaining = end - Date.now();
+    if (remaining <= 0) { clearTimer(); return; }
+    timerInterval = setInterval(renderTimer, 1000);
+    if (canNotify) {
+      timerTimeout = setTimeout(function() {
+        new Notification('⏰ Estacionamiento', { body: 'Tu tiempo está por vencer', icon: './icon-192.png' });
+        clearTimer();
+      }, remaining);
+    }
+    renderTimer();
+  }
+
+  function startTimer(ms) {
+    clearTimer();
+    requestNotifPerm(function(ok) {
+      var end = Date.now() + ms;
+      localStorage.setItem('carTimer', JSON.stringify({ end: end }));
+      armTimer(end, ok);
+    });
+  }
+
+  function renderTimer() {
+    var sec = $('timerSection'), disp = $('timerDisplay'), cnt = $('timerCount'), note = $('timerNote');
+    if (!sec) return;
+    var list = load();
+    sec.hidden = !list.length;
+    if (!list.length) return;
+    var stored = null;
+    try { stored = JSON.parse(localStorage.getItem('carTimer')); } catch(e) {}
+    if (!stored || Date.now() >= stored.end) { disp.hidden = true; if (note) note.hidden = true; return; }
+    disp.hidden = false;
+    if (note) note.hidden = false;
+    var rem = Math.max(0, stored.end - Date.now());
+    var h = Math.floor(rem / 3600000);
+    var m = Math.floor((rem % 3600000) / 60000);
+    var s = Math.floor((rem % 60000) / 1000);
+    cnt.textContent = '⏱ ' + (h > 0 ? pad(h) + ':' + pad(m) + ':' + pad(s) : pad(m) + ':' + pad(s));
+    cnt.className = rem < 600000 ? 'urgent' : '';
+  }
+
+  /* ── Direction compass ────────────────────────────────── */
+  function toRad(d) { return d * Math.PI / 180; }
+  function calcBearing(from, to) {
+    var dLon = toRad(to.lng - from.lng);
+    var lat1 = toRad(from.lat), lat2 = toRad(to.lat);
+    var y = Math.sin(dLon) * Math.cos(lat2);
+    var x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+
+  function updateCompassArrow() {
+    var svg = $('compassArrowSvg');
+    if (!svg) return;
+    var rot = (compassBearing - compassHeading + 360) % 360;
+    svg.style.transform = 'rotate(' + rot + 'deg)';
+  }
+
+  function onDeviceOrientation(e) {
+    var h = (e.webkitCompassHeading != null) ? e.webkitCompassHeading : (360 - (e.alpha || 0));
+    compassHeading = h;
+    updateCompassArrow();
+  }
+
+  function openCompass() {
+    var list = load();
+    if (!list.length) { setStatus('No hay ningún lugar guardado.', true); return; }
+    var spot = list[0];
+    var overlay = $('compassOverlay');
+    overlay.hidden = false;
+    $('compassDist').textContent = 'Localizando…';
+    $('compassAddr').textContent = spot.address || '';
+    $('compassErr').textContent = '';
+
+    var startOrientation = function() {
+      window.addEventListener('deviceorientation', onDeviceOrientation, true);
+    };
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      DeviceOrientationEvent.requestPermission()
+        .then(function(r) {
+          if (r === 'granted') startOrientation();
+          else $('compassErr').textContent = 'Permiso de brújula denegado en Ajustes.';
+        })
+        .catch(function() { $('compassErr').textContent = 'No se pudo acceder a la brújula.'; });
+    } else if (window.DeviceOrientationEvent) {
+      startOrientation();
+    } else {
+      $('compassErr').textContent = 'Tu dispositivo no tiene brújula.';
+    }
+
+    compassWatch = navigator.geolocation.watchPosition(function(pos) {
+      var here = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      compassBearing = calcBearing(here, spot);
+      $('compassDist').textContent = fmtDist(meters(here.lat, here.lng, spot.lat, spot.lng));
+      updateCompassArrow();
+    }, function() {
+      $('compassErr').textContent = 'No se pudo obtener tu posición.';
+    }, { enableHighAccuracy: true, maximumAge: 2000 });
+  }
+
+  function closeCompass() {
+    $('compassOverlay').hidden = true;
+    window.removeEventListener('deviceorientation', onDeviceOrientation, true);
+    if (compassWatch !== null) { navigator.geolocation.clearWatch(compassWatch); compassWatch = null; }
+  }
+
+  /* ── Share card (Canvas) ──────────────────────────────── */
+  function shareCard(s) {
+    var c = document.createElement('canvas');
+    c.width = 800; c.height = 440;
+    var ctx = c.getContext('2d');
+    var dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    ctx.fillStyle = dark ? '#0F1218' : '#14213d';
+    ctx.fillRect(0, 0, 800, 440);
+    ctx.fillStyle = 'rgba(255,255,255,.04)';
+    for (var gx = 28; gx < 800; gx += 28)
+      for (var gy = 28; gy < 440; gy += 28) {
+        ctx.beginPath(); ctx.arc(gx, gy, 1.5, 0, Math.PI * 2); ctx.fill();
+      }
+    ctx.fillStyle = '#0A4DA2';
+    ctx.beginPath(); ctx.arc(76, 76, 44, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(76, 76, 38, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 48px "Barlow Condensed", "Arial Narrow", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('P', 76, 78);
+    var addrText = s.address || (s.lat.toFixed(5) + ', ' + s.lng.toFixed(5));
+    ctx.font = 'bold 36px "Barlow Condensed", "Arial Narrow", sans-serif';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    var words = addrText.split(' '), line = '', y = 155, maxW = 720;
+    words.forEach(function(w) {
+      var test = line + (line ? ' ' : '') + w;
+      if (ctx.measureText(test).width > maxW && line) { ctx.fillText(line, 40, y); y += 44; line = w; }
+      else line = test;
+    });
+    ctx.fillText(line, 40, y);
+    ctx.fillStyle = '#8DB8FF';
+    ctx.font = '500 24px Barlow, sans-serif';
+    ctx.fillText(fmt(s.ts) + (s.note ? '  ·  ' + s.note : ''), 40, y + 52);
+    ctx.fillStyle = 'rgba(255,255,255,.3)';
+    ctx.font = '500 20px Barlow, sans-serif';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+    ctx.fillText('¿Dónde está mi auto?', 760, 420);
+    c.toBlob(function(blob) {
+      var file = new File([blob], 'mi-auto.png', { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ title: '¿Dónde está mi auto?', files: [file] }).catch(function() {});
+      } else if (navigator.share) {
+        navigator.share({ title: 'Mi auto', text: viewUrl(s) + (s.note ? ' (' + s.note + ')' : '') }).catch(function() {});
+      } else {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = 'mi-auto.png'; a.click();
+      }
+    });
   }
 
   function render() {
@@ -359,6 +628,7 @@
     var last = list[0];
     current.hidden = false;
     $("when").textContent = fmt(last.ts);
+    $("addr").textContent = last.address || '';
     $("acc").textContent = last.acc ? "Precisión de unos " + Math.round(last.acc) + " m" : "";
     if (document.activeElement !== $("note")) $("note").value = last.note || "";
 
@@ -368,13 +638,14 @@
     $("removePhoto").hidden = !last.photo;
     $("takePhoto").textContent = last.photo ? "📸 Repetir foto" : "📸 Hacer foto";
     showMap(last);
+    renderTimer();
 
     var older = list.slice(1);
     wrap.hidden = !older.length;
     older.forEach(function (s) {
       var li = document.createElement("li");
       var span = document.createElement("span");
-      span.textContent = "📍 " + fmt(s.ts);
+      span.textContent = "📍 " + (s.address ? s.address + ' · ' + fmt(s.ts) : fmt(s.ts));
       if (s.note) {
         var n = document.createElement("span");
         n.className = "note";
@@ -410,6 +681,7 @@
       else setStatus("No se pudo guardar. Comprueba que el navegador permita el almacenamiento del sitio.", true);
       saveBtn.disabled = false;
       render();
+      geocodeSpot(list[0]);
     }, function (err) {
       var msg = "No se pudo obtener tu posición.";
       if (err.code === 1) msg = "Permiso de ubicación denegado. Permite la ubicación para este sitio en los ajustes de Chrome.";
@@ -482,14 +754,7 @@
   $("share").addEventListener("click", function () {
     var list = load();
     if (!list.length) return;
-    var s = list[0];
-    var text = "Mi auto está aquí: " + viewUrl(s) +
-               (s.note ? " (" + s.note + ")" : "") + " - guardado el " + fmt(s.ts);
-    if (navigator.share) {
-      navigator.share({ title: "Mi auto", text: text }).catch(function () {});
-    } else {
-      window.open("https://wa.me/?text=" + encodeURIComponent(text), "_blank");
-    }
+    shareCard(list[0]);
   });
 
   /* Live distance */
@@ -525,6 +790,10 @@
         });
       }
       showDistance();
+      if (lastFix.straight < 300 && !notifiedClose && Notification.permission === 'granted') {
+        notifiedClose = true;
+        new Notification('🚗 Tu auto está cerca', { body: 'A menos de 300 m — ya casi llegas' });
+      }
     }, function (err) {
       stopWatch();
       setStatus(err.code === 1 ? "Permiso de ubicación denegado." : "No se pudo obtener tu posición.", true);
@@ -545,7 +814,40 @@
   window.addEventListener('offline', updateOfflineBanner);
   updateOfflineBanner();
 
+  /* Timer buttons */
+  document.querySelectorAll('.timer-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      startTimer(parseInt(btn.dataset.min, 10) * 60 * 1000);
+    });
+  });
+  $('timerCancel').addEventListener('click', clearTimer);
+
+  /* Compass */
+  $('compassBtn').addEventListener('click', openCompass);
+  $('compassClose').addEventListener('click', closeCompass);
+
   render();
+
+  /* Re-arm timer from localStorage on load */
+  (function rearmTimer() {
+    var saved = localStorage.getItem('carTimer');
+    if (!saved) return;
+    var t = JSON.parse(saved);
+    var remaining = t.end - Date.now();
+    if (remaining > 0) armTimer(t.end, true);
+    else localStorage.removeItem('carTimer');
+  })();
+
+  /* PWA shortcut handling */
+  (function handleShortcut() {
+    var action = new URLSearchParams(location.search).get('action');
+    if (action === 'save') {
+      setTimeout(function() { $('save').click(); }, 500);
+    } else if (action === 'view') {
+      var cur = document.getElementById('current');
+      if (cur) cur.scrollIntoView({ behavior: 'smooth' });
+    }
+  })();
 })();
 </script>
 <script>

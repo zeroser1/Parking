@@ -27,5 +27,21 @@
       "type": "image/png",
       "purpose": "maskable"
     }
+  ],
+  "shortcuts": [
+    {
+      "name": "Guardar mi auto",
+      "short_name": "Guardar",
+      "description": "Guarda tu posición actual como lugar de estacionamiento",
+      "url": "./?action=save",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Ver mi auto",
+      "short_name": "Ver",
+      "description": "Ve directamente a tu lugar guardado",
+      "url": "./?action=view",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
   ]
 }

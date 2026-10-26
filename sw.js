@@ -1,4 +1,4 @@
-const CACHE = 'parking-v1';
+const CACHE = 'parking-v2';
 
 const PRECACHE = [
   './',
@@ -31,6 +31,12 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   const { hostname } = new URL(event.request.url);
+
+  // Nominatim: always network-only (result stored in localStorage by the app)
+  if (hostname === 'nominatim.openstreetmap.org') {
+    event.respondWith(fetch(event.request));
+    return;
+  }
 
   // Map tiles and routing: try network, cache on success, silently fail offline
   if (hostname.includes('api.mapbox.com') || hostname.includes('openstreetmap.de')) {
