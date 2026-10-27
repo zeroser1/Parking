@@ -567,53 +567,15 @@
 
   /* ── Share card (Canvas) ──────────────────────────────── */
   function shareCard(s) {
-    var c = document.createElement('canvas');
-    c.width = 800; c.height = 440;
-    var ctx = c.getContext('2d');
-    var dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    ctx.fillStyle = dark ? '#0F1218' : '#14213d';
-    ctx.fillRect(0, 0, 800, 440);
-    ctx.fillStyle = 'rgba(255,255,255,.04)';
-    for (var gx = 28; gx < 800; gx += 28)
-      for (var gy = 28; gy < 440; gy += 28) {
-        ctx.beginPath(); ctx.arc(gx, gy, 1.5, 0, Math.PI * 2); ctx.fill();
-      }
-    ctx.fillStyle = '#0A4DA2';
-    ctx.beginPath(); ctx.arc(76, 76, 44, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(76, 76, 38, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 48px "Barlow Condensed", "Arial Narrow", sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('P', 76, 78);
-    var addrText = s.address || (s.lat.toFixed(5) + ', ' + s.lng.toFixed(5));
-    ctx.font = 'bold 36px "Barlow Condensed", "Arial Narrow", sans-serif';
-    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    var words = addrText.split(' '), line = '', y = 155, maxW = 720;
-    words.forEach(function(w) {
-      var test = line + (line ? ' ' : '') + w;
-      if (ctx.measureText(test).width > maxW && line) { ctx.fillText(line, 40, y); y += 44; line = w; }
-      else line = test;
-    });
-    ctx.fillText(line, 40, y);
-    ctx.fillStyle = '#8DB8FF';
-    ctx.font = '500 24px Barlow, sans-serif';
-    ctx.fillText(fmt(s.ts) + (s.note ? '  ·  ' + s.note : ''), 40, y + 52);
-    ctx.fillStyle = 'rgba(255,255,255,.3)';
-    ctx.font = '500 20px Barlow, sans-serif';
-    ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
-    ctx.fillText('¿Dónde está mi auto?', 760, 420);
-    c.toBlob(function(blob) {
-      var file = new File([blob], 'mi-auto.png', { type: 'image/png' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        navigator.share({ title: '¿Dónde está mi auto?', files: [file] }).catch(function() {});
-      } else if (navigator.share) {
-        navigator.share({ title: 'Mi auto', text: viewUrl(s) + (s.note ? ' (' + s.note + ')' : '') }).catch(function() {});
-      } else {
-        var a = document.createElement('a');
-        a.href = URL.createObjectURL(blob); a.download = 'mi-auto.png'; a.click();
-      }
-    });
+    var mapsUrl = 'https://maps.google.com/maps?q=' + s.lat + ',' + s.lng;
+    var text = '📍 Mi auto está acá:\n' + mapsUrl;
+    if (s.address) text += '\n' + s.address;
+    if (s.note) text += '\n(' + s.note + ')';
+    if (navigator.share) {
+      navigator.share({ title: '¿Dónde está mi auto?', text: text, url: mapsUrl }).catch(function() {});
+    } else {
+      window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
+    }
   }
 
   function render() {
